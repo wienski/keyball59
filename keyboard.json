@@ -7,7 +7,7 @@
     },
     "url": "https://aldexuan.github.io/MCK/trackball.html",
     "manufacturer": "MCK",
-    "maintainer": "",
+    "maintainer": "nobody",
     "processor": "RP2040",
     "bootloader": "rp2040",
     "features": {
