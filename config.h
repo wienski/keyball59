@@ -5,11 +5,6 @@
 // #define VIAL_UNLOCK_COMBO_ROWS { 0, 4 }
 // #define VIAL_UNLOCK_COMBO_COLS { 0, 0 }
 
-#define SPLIT_TRANSPORT_MIRROR
-#define SPLIT_LAYER_STATE_ENABLE
-#define SPLIT_MODS_ENABLE
-#define SPLIT_WPM_ENABLE
-
 #define SPLIT_POINTING_ENABLE
 #define POINTING_DEVICE_RIGHT
 #define POINTING_DEVICE_INVERT_Y
@@ -21,9 +16,13 @@
 #define SPI_MOSI_PIN GP23
 #define POINTING_DEVICE_CS_PIN GP16
 
+#define SPLIT_TRANSACTION_IDS_KB TB_SYNC_CONFIG
+
 #ifdef RGB_MATRIX_ENABLE
-#    define RGB_MATRIX_LED_COUNT 59
+#  define RGB_MATRIX_LED_COUNT 59
 #endif
 
-// uncomment before flashing the right side
-// #define MASTER_RIGHT
+#ifdef OLED_ENABLE
+#  define OLED_FONT_H "glcdfont.h"
+#endif
+

@@ -1,3 +1,7 @@
+#pragma once
+
+#include "quantum.h"
+
 enum custom_keycodes {
     TB_SCROLL = QK_KB_0,
     TB_SNIPE,

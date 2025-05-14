@@ -6,7 +6,7 @@ Despite this "inspiration", the guy making these keyboards is reluctant to compl
 
 No shits given, it's a buggy mess anyway. Here I implement a much better firmware for this keyboard, complete with everything I personally want from a keyboard.
 
-Feel free to fork and make your own version!
+This should go without saying, but **Feel free to fork and make your own version!**
 
 ## Features
 
@@ -19,16 +19,17 @@ Feel free to fork and make your own version!
 - Key locking: you can lock Shift, or scrolling, or sniping... up to 16 keys at a time (configurable in the source code)
 - Turbo keys: you can make up to 16 keys turbo, meaning they fire every 80 ms (configurable) while held
 - Turbo locking: you can use key locking and turbo together!
+- Persistent config on demand: sensitivity settings can be saved to EEPROM by a key press
+- "Natural scrolling" (can be disabled in keymap's `config.h`)
+- Left OLED display shows Lock and Turbo status (up to 16 enries each)
+- Right OLED display shows sensitivity settings
 
 ## Missing features
 
-- The default keymap is currently blank, you'll have to set it in Vial to your preference before you can use the keyboard at all
-- Unfortunately, the board seems to miss any hardware way to identify the halves. By default it thinks the connected half is on the left, but you can easily change this by uncommenting a certain line in the code.
-- I have not implemented saving the configuration to EEPROM yet
-- I don't draw anything on screen yet, and probably won't implement the furries
+- The board is wired in a way that doesn't allow using both sides as master easily; it could be fixed, especially with hardware mods, but I don't currently possess the time for such endeavours. For now, the firmware only works properly when connected to the left side
+- I don't plan to implement the furries
 - I don't plan to implement auto mouse layer
 - I won't implement the exact keycodes from the stock firmware, as my vision is more UNIX-like
-- "Natural scrolling" is not supported, but I'll think about it
 
 ## Locking
 
