@@ -71,10 +71,8 @@ led_config_t g_led_config = {
 #define TB_MIN_CPI 100
 #define TB_SCROLL_SMOOTHNESS 8
 
-bool tb_do_scroll = false;
 int16_t tb_scroll_acc_h = 0;
 int16_t tb_scroll_acc_v = 0;
-bool tb_do_snipe = false;
 bool tb_cpi_dirty = true;
 
 typedef union {
@@ -83,13 +81,17 @@ typedef union {
         uint8_t pointing_multiplier : 7;
         uint8_t scrolling_multiplier : 7;
         uint8_t sniping_multiplier : 7;
+        bool do_scroll : 1;
+        bool do_snipe : 1;
     } __attribute__((packed));
 } keyball_config_t;
 
 keyball_config_t keyball_config = {
     .pointing_multiplier = 14,
     .scrolling_multiplier = 8,
-    .sniping_multiplier = 4
+    .sniping_multiplier = 4,
+    .do_scroll = false,
+    .do_snipe = false
 };
 
 static void tb_handle_sync_config(uint8_t in_buflen, const void* in_data, uint8_t out_buflen, void* out_data) {
@@ -101,9 +103,9 @@ static void tb_update_cpi(void) {
     if (!tb_cpi_dirty) return;
 
     // if scrolling and sniping at the same time, use sniping cpi
-    if (tb_do_snipe) {
+    if (keyball_config.do_snipe) {
         pointing_device_set_cpi(100 * keyball_config.sniping_multiplier);
-    } else if (tb_do_scroll) {
+    } else if (keyball_config.do_scroll) {
         pointing_device_set_cpi(100 * keyball_config.scrolling_multiplier);
     } else {
         pointing_device_set_cpi(100 * keyball_config.pointing_multiplier);
@@ -137,7 +139,7 @@ static void persist_config_to_eeprom(void) {
 }
 
 void tb_adjust_cpi(uint8_t steps) {
-    if (!tb_do_scroll && !tb_do_snipe) {
+    if (!keyball_config.do_scroll && !keyball_config.do_snipe) {
         keyball_config.pointing_multiplier += steps;
         while (keyball_config.pointing_multiplier < TB_MIN_CPI / 100) {
             keyball_config.pointing_multiplier += 1;
@@ -147,7 +149,7 @@ void tb_adjust_cpi(uint8_t steps) {
         }
     }
 
-    if (tb_do_scroll) {
+    if (keyball_config.do_scroll) {
         keyball_config.scrolling_multiplier += steps;
         while (keyball_config.scrolling_multiplier < TB_MIN_CPI / 100) {
             keyball_config.scrolling_multiplier += 1;
@@ -157,7 +159,7 @@ void tb_adjust_cpi(uint8_t steps) {
         }
     }
 
-    if (tb_do_snipe) {
+    if (keyball_config.do_snipe) {
         keyball_config.sniping_multiplier += steps;
         while (keyball_config.sniping_multiplier < TB_MIN_CPI / 100) {
             keyball_config.sniping_multiplier += 1;
@@ -173,7 +175,7 @@ void tb_adjust_cpi(uint8_t steps) {
 report_mouse_t pointing_device_task_kb(report_mouse_t report) {
     report = pointing_device_task_user(report);
 
-    if (tb_do_scroll) {
+    if (keyball_config.do_scroll) {
 #if defined(POINTING_DEVICE_INVERT_X) == defined(NATURAL_SCROLLING)
         tb_scroll_acc_h += report.x;
 #else
@@ -220,6 +222,9 @@ uint16_t ck_locked_keycodes[CK_LOCKED_KEYS_MAX] = {};
 // todo: use a bitmap
 bool ck_lock_records[CK_LOCKED_KEYS_MAX] = {};
 
+#define LOCKED_LAST ((ck_lock_records_head + ck_lock_records_count - 1) & (CK_LOCKED_KEYS_MAX - 1))
+#define LOCKED_NEXT ((ck_lock_records_head + ck_lock_records_count) & (CK_LOCKED_KEYS_MAX - 1))
+
 static void ck_unlock(uint8_t i) {
     ck_locked_keycodes[i] = ck_locked_keycodes[ck_lock_records_head];
     ck_lock_records[i] = ck_lock_records[ck_lock_records_head];
@@ -230,6 +235,11 @@ static void ck_unlock(uint8_t i) {
     if (ck_lock_records_head >= CK_LOCKED_KEYS_MAX) {
         ck_lock_records_head -= CK_LOCKED_KEYS_MAX;
     }
+}
+
+static bool lock_is_waiting_for_input(void) {
+    return ck_lock_records_count > 0
+        && ck_locked_keycodes[LOCKED_LAST] == CK_LOCK;
 }
 
 static bool ck_lock_preprocess_record(uint16_t keycode, keyrecord_t *record) {
@@ -258,40 +268,22 @@ static bool ck_lock_preprocess_record(uint16_t keycode, keyrecord_t *record) {
 
 static void ck_lock_process_record(uint16_t keycode, keyrecord_t *record) {
     if (
-        ck_lock_records_count > 0
+        lock_is_waiting_for_input()
         && record->event.pressed
     ) {
-        uint8_t ck_lock_records_tail =
-            (ck_lock_records_head + ck_lock_records_count - 1)
-            & (CK_LOCKED_KEYS_MAX - 1);
-
-        if (ck_locked_keycodes[ck_lock_records_tail] == CK_LOCK) {
-            ck_locked_keycodes[ck_lock_records_tail] = keycode;
-        }
+        ck_locked_keycodes[LOCKED_LAST] = keycode;
     }
 }
 
 static void process_ck_lock(void) {
-    if (
-        ck_lock_records_count > 0
-    ) {
-        uint8_t ck_lock_records_tail =
-            (ck_lock_records_head + ck_lock_records_count - 1)
-            & (CK_LOCKED_KEYS_MAX - 1);
-
-        if (ck_locked_keycodes[ck_lock_records_tail] == CK_LOCK) {
-            // cancel locking on second CK_LOCK press
-            ck_lock_records_count -= 1;
-            return;
-        }
+    if (lock_is_waiting_for_input()) {
+        // cancel locking on second CK_LOCK press
+        ck_lock_records_count -= 1;
+        return;
     }
 
     if (ck_lock_records_count < CK_LOCKED_KEYS_MAX) {
-        uint8_t ck_lock_records_tail =
-            (ck_lock_records_head + ck_lock_records_count)
-            & (CK_LOCKED_KEYS_MAX - 1);
-
-        ck_locked_keycodes[ck_lock_records_tail] = CK_LOCK;
+        ck_locked_keycodes[LOCKED_NEXT] = CK_LOCK;
         ck_lock_records_count += 1;
     }
 }
@@ -311,6 +303,9 @@ uint8_t ck_turbo_records_count = 0;
 uint16_t ck_turbo_keycodes[CK_TURBO_KEYS_MAX] = {};
 uint8_t ck_turbo_records[CK_TURBO_KEYS_MAX] = {};
 deferred_token ck_turbo_tokens[CK_TURBO_KEYS_MAX] = {};
+
+#define TURBO_LAST ((ck_turbo_records_head + ck_turbo_records_count - 1) & (CK_TURBO_KEYS_MAX - 1))
+#define TURBO_NEXT ((ck_turbo_records_head + ck_turbo_records_count) & (CK_TURBO_KEYS_MAX - 1))
 
 enum {
     TURBO_READY = 0,
@@ -366,29 +361,41 @@ static void ck_turbo_off(uint8_t i) {
     }
 }
 
+static bool turbo_is_waiting_for_input(void) {
+    return ck_turbo_records_count > 0
+        && ck_turbo_keycodes[TURBO_LAST] == CK_TURBO;
+}
+
 static bool ck_turbo_preprocess_record(uint16_t keycode, keyrecord_t *record) {
-    if (keycode == CK_TURBO) return true;
-
-    if (
-        ck_turbo_records_count > 0
-        && record->event.pressed
-    ) {
-        uint8_t ck_turbo_records_tail =
-            (ck_turbo_records_head + ck_turbo_records_count - 1)
-            & (CK_TURBO_KEYS_MAX - 1);
-
-        if (ck_turbo_keycodes[ck_turbo_records_tail] == CK_TURBO) {
-            for (uint8_t i = 0; i < ck_turbo_records_count; i++) {
-                uint8_t j = (ck_turbo_records_head + i) & (CK_TURBO_KEYS_MAX - 1);
-                if (ck_turbo_keycodes[j] != keycode) continue;
-
-                ck_turbo_off(j);
-                // cancel turbo caused by last CK_TURBO press
+    if (keycode == CK_TURBO) {
+        if (record->event.pressed) {
+            if (turbo_is_waiting_for_input()) {
+                // cancel turbo on second CK_TURBO press
                 ck_turbo_records_count -= 1;
-
-                return false;
+            } else if (ck_turbo_records_count < CK_TURBO_KEYS_MAX) {
+                ck_turbo_keycodes[TURBO_NEXT] = CK_TURBO;
+                ck_turbo_records_count += 1;
             }
         }
+
+        return false;
+    }
+
+    if (turbo_is_waiting_for_input() && record->event.pressed) {
+        for (uint8_t i = 0; i < ck_turbo_records_count; i++) {
+            uint8_t j = (ck_turbo_records_head + i) & (CK_TURBO_KEYS_MAX - 1);
+            if (ck_turbo_keycodes[j] != keycode) continue;
+
+            ck_turbo_off(j);
+            ck_turbo_records_count -= 1;
+
+            return false;
+        }
+
+        ck_turbo_keycodes[TURBO_LAST] = keycode;
+        ck_turbo_records[TURBO_LAST] = TURBO_READY;
+
+        return false;
     }
 
     for (uint8_t i = 0; i < ck_turbo_records_count; i++) {
@@ -411,50 +418,6 @@ static bool ck_turbo_preprocess_record(uint16_t keycode, keyrecord_t *record) {
     return true;
 }
 
-static bool ck_turbo_process_record(uint16_t keycode, keyrecord_t *record) {
-    if (
-        ck_turbo_records_count > 0
-        && record->event.pressed
-    ) {
-        uint8_t ck_turbo_records_tail =
-            (ck_turbo_records_head + ck_turbo_records_count - 1)
-            & (CK_TURBO_KEYS_MAX - 1);
-
-        if (ck_turbo_keycodes[ck_turbo_records_tail] == CK_TURBO) {
-            ck_turbo_keycodes[ck_turbo_records_tail] = keycode;
-            ck_turbo_records[ck_turbo_records_tail] = TURBO_READY;
-            return false;
-        }
-    }
-
-    return true;
-}
-
-static void process_ck_turbo(void) {
-    if (
-        ck_turbo_records_count > 0
-    ) {
-        uint8_t ck_turbo_records_tail =
-            (ck_turbo_records_head + ck_turbo_records_count - 1)
-            & (CK_TURBO_KEYS_MAX - 1);
-
-        if (ck_turbo_keycodes[ck_turbo_records_tail] == CK_TURBO) {
-            // cancel turbo on second CK_TURBO press
-            ck_turbo_records_count -= 1;
-            return;
-        }
-    }
-
-    if (ck_turbo_records_count < CK_TURBO_KEYS_MAX) {
-        uint8_t ck_turbo_records_tail =
-            (ck_turbo_records_head + ck_turbo_records_count)
-            & (CK_TURBO_KEYS_MAX - 1);
-
-        ck_turbo_keycodes[ck_turbo_records_tail] = CK_TURBO;
-        ck_turbo_records_count += 1;
-    }
-}
-
 void eeconfig_init_kb(void) {
     persist_config_to_eeprom();
 }
@@ -474,16 +437,14 @@ bool process_record_kb(uint16_t keycode, keyrecord_t *record) {
 
     ck_lock_process_record(keycode, record);
 
-    if (!ck_turbo_process_record(keycode, record)) {
-        return false;
-    }
-
     switch (keycode) {
         case TB_SCROLL:
-            tb_do_scroll = record->event.pressed;
+            keyball_config.do_scroll = record->event.pressed;
+            tb_cpi_dirty = true;
             break;
         case TB_SNIPE:
-            tb_do_snipe = record->event.pressed;
+            keyball_config.do_snipe = record->event.pressed;
+            tb_cpi_dirty = true;
             break;
         case TB_CPI_DOWN:
             if (record->event.pressed) {
@@ -498,11 +459,6 @@ bool process_record_kb(uint16_t keycode, keyrecord_t *record) {
         case CK_LOCK:
             if (record->event.pressed) {
                 process_ck_lock();
-            }
-            break;
-        case CK_TURBO:
-            if (record->event.pressed) {
-                process_ck_turbo();
             }
             break;
         case CK_SAVE:
@@ -530,181 +486,136 @@ static void render_logo(void) {
     oled_write_P(qmk_logo, false);
 }
 
-static void oled_write_keycode(uint16_t keycode) {
+static bool oled_write_keycode(uint16_t keycode) {
     switch (keycode) {
         case KC_A...KC_Z:
-            oled_write_char(' ', false);
             oled_write_char(keycode - KC_A + 'a', false);
-            break;
+            return true;
         case KC_1...KC_9:
-            oled_write_char(' ', false);
             oled_write_char(keycode - KC_1 + '1', false);
-            break;
+            return true;
         case KC_0:
-            oled_write_char(' ', false);
             oled_write_char('0', false);
-            break;
+            return true;
         case KC_ENTER:
-            oled_write_char(' ', false);
             oled_write_char(0x06, false);
-            break;
+            return true;
         case KC_ESCAPE:
-            oled_write_char(' ', false);
             oled_write_char(0x0a, false);
-            break;
+            return true;
         case KC_BACKSPACE:
-            oled_write_char(' ', false);
             oled_write_char(0x04, false);
-            break;
+            return true;
         case KC_TAB:
-            oled_write_char(' ', false);
             oled_write_char(0x08, false);
-            break;
+            return true;
         case KC_SPACE:
-            oled_write_char(' ', false);
             oled_write_char(0x03, false);
-            break;
+            return true;
         case KC_MINUS:
-            oled_write_char(' ', false);
             oled_write_char('-', false);
-            break;
+            return true;
         case KC_EQUAL:
-            oled_write_char(' ', false);
             oled_write_char('=', false);
-            break;
+            return true;
         case KC_LEFT_BRACKET:
-            oled_write_char(' ', false);
             oled_write_char('[', false);
-            break;
+            return true;
         case KC_RIGHT_BRACKET:
-            oled_write_char(' ', false);
             oled_write_char(']', false);
-            break;
+            return true;
         case KC_BACKSLASH:
-            oled_write_char(' ', false);
             oled_write_char('\\', false);
-            break;
+            return true;
         case KC_SEMICOLON:
-            oled_write_char(' ', false);
             oled_write_char(';', false);
-            break;
+            return true;
         case KC_QUOTE:
-            oled_write_char(' ', false);
             oled_write_char('\'', false);
-            break;
+            return true;
         case KC_GRAVE:
-            oled_write_char(' ', false);
             oled_write_char('`', false);
-            break;
+            return true;
         case KC_COMMA:
-            oled_write_char(' ', false);
             oled_write_char(',', false);
-            break;
+            return true;
         case KC_DOT:
-            oled_write_char(' ', false);
             oled_write_char('.', false);
-            break;
+            return true;
         case KC_SLASH:
-            oled_write_char(' ', false);
             oled_write_char('/', false);
-            break;
+            return true;
         case KC_F1...KC_F9:
             oled_write_char('f', false);
             oled_write_char(keycode - KC_F1 + '1', false);
-            break;
+            return true;
         case KC_F10...KC_F12:
             oled_write_char('f', false);
             oled_write_char(keycode - KC_F1 + 'a', false);
-            break;
+            return true;
         case KC_RIGHT:
-            oled_write_char(' ', false);
             oled_write_char(0x1a, false);
-            break;
+            return true;
         case KC_LEFT:
-            oled_write_char(' ', false);
             oled_write_char(0x1b, false);
-            break;
+            return true;
         case KC_DOWN:
-            oled_write_char(' ', false);
             oled_write_char(0x19, false);
-            break;
+            return true;
         case KC_UP:
-            oled_write_char(' ', false);
             oled_write_char(0x18, false);
-            break;
+            return true;
         case KC_HOME:
-            oled_write_char(' ', false);
             oled_write_char(0x0b, false);
-            break;
+            return true;
         case KC_END:
-            oled_write_char(' ', false);
             oled_write_char(0x0c, false);
-            break;
+            return true;
         case KC_PAGE_UP:
-            oled_write_char(' ', false);
             oled_write_char(0x0e, false);
-            break;
+            return true;
         case KC_PAGE_DOWN:
-            oled_write_char(' ', false);
             oled_write_char(0x0d, false);
-            break;
+            return true;
         case KC_DELETE:
-            oled_write_char(' ', false);
             oled_write_char(0x05, false);
-            break;
+            return true;
         case KC_LEFT_CTRL:
         case KC_RIGHT_CTRL:
-            oled_write_char(' ', false);
             oled_write_char(0x5e, false);
-            break;
+            return true;
         case KC_LEFT_SHIFT:
         case KC_RIGHT_SHIFT:
-            oled_write_char(' ', false);
             oled_write_char(0x01, false);
-            break;
+            return true;
         case KC_LEFT_GUI:
         case KC_RIGHT_GUI:
-            oled_write_char(' ', false);
             oled_write_char(0x09, false);
-            break;
+            return true;
         case KC_LEFT_ALT:
-            oled_write_char(' ', false);
             oled_write_char(0x02, false);
-            break;
+            return true;
         case KC_RIGHT_ALT:
-            oled_write_char(' ', false);
             oled_write_char(0x07, false);
-            break;
-        case QK_MOUSE_BUTTON_1:
-            oled_write_char(' ', false);
-            oled_write_char(0x93, false);
-            break;
-        case QK_MOUSE_BUTTON_2:
-            oled_write_char(' ', false);
-            oled_write_char(0xb3, false);
-            break;
-        case QK_MOUSE_BUTTON_3:
-            oled_write_char(' ', false);
-            oled_write_char(0xd3, false);
-            break;
+            return true;
+        case QK_MOUSE_BUTTON_1...QK_MOUSE_BUTTON_3:
+            oled_write_char(0x14 + keycode - QK_MOUSE_BUTTON_1, false);
+            return true;
+        case QK_MOUSE_BUTTON_4...QK_MOUSE_BUTTON_8:
+            oled_write_char(0x17, false);
+            oled_write_char(keycode - QK_MOUSE_BUTTON_1 + '1', false);
+            return true;
         case TB_SCROLL:
-            oled_write_char(' ', false);
-            oled_write_char(0x0f, false);
-            break;
         case TB_SNIPE:
-            oled_write_char(' ', false);
-            oled_write_char(0x13, false);
-            break;
+            // handled by the right half of the keyboard,
+            // don't show here
         case KC_NO:
         case CK_LOCK:
         case CK_TURBO:
-            oled_write_char(' ', false);
-            oled_write_char(' ', false);
-            break;
+            return false;
         default:
             oled_write_char(0, false);
-            oled_write_char(0, false);
-            break;
+            return true;
     }
 }
 
@@ -718,33 +629,225 @@ bool oled_task_kb(void) {
     };
 
     static const char PROGMEM scrolling_cpi[] = {
-        0x0f, 0x20, 0x43, 0x50, 0x49, 0x00
+        0x1c, 0x20, 0x43, 0x50, 0x49, 0x00
     };
 
     static const char PROGMEM sniping_cpi[] = {
-        0x13, 0x20, 0x43, 0x50, 0x49, 0x00
+        0x1d, 0x20, 0x43, 0x50, 0x49, 0x00
     };
 
     static const char PROGMEM hundred[] = {
         0x30, 0x30, 0x00
     };
 
+    static const char PROGMEM big_numbers_hi[][2] = {
+        { 0x8d, 0x8e }, { 0x8f, 0x90 }, { 0xcd, 0xce }, { 0x93, 0x94 }, { 0xd1, 0xd2 },
+        { 0x97, 0x98 }, { 0xd5, 0xd6 }, { 0x91, 0x92 }, { 0x95, 0x96 }, { 0xb7, 0xb8 }
+    };
+
+    static const char PROGMEM big_numbers_lo[][2] = {
+        { 0xad, 0xae }, { 0xaf, 0xb0 }, { 0xcf, 0xd0 }, { 0xb3, 0xb4 }, { 0xd3, 0xd4 },
+        { 0xb3, 0xb4 }, { 0xb5, 0xb6 }, { 0xb1, 0xb2 }, { 0xb5, 0xb6 }, { 0xd7, 0xd8 }
+    };
+
     if(!oled_task_user()) { return false; }
+
+    oled_clear();
 
     if (is_keyboard_left()) {
         // the screen is 16 rows x 5 cols
 
-        for (uint8_t i = 0; i < 16; i++) {
-            oled_set_cursor(0, i);
+        uint8_t layer = get_highest_layer(layer_state);
 
-            oled_write_keycode(ck_turbo_keycodes[i]);
+        oled_write_char(big_numbers_hi[layer][0], false);
+        oled_write_char(big_numbers_hi[layer][1], false);
+
+        oled_write_char(' ', false);
+
+        if (get_mods() & MOD_MASK_GUI) {
+            oled_write_char(0xc9, false);
+            oled_write_char(0xca, false);
+        } else {
             oled_write_char(' ', false);
-            oled_write_keycode(ck_locked_keycodes[i]);
+            oled_write_char(' ', false);
+        }
+
+        oled_write_char(big_numbers_lo[layer][0], false);
+        oled_write_char(big_numbers_lo[layer][1], false);
+
+        oled_write_char(' ', false);
+
+        if (get_mods() & MOD_MASK_GUI) {
+            oled_write_char(0xcb, false);
+            oled_write_char(0xcc, false);
+        } else {
+            oled_write_char(' ', false);
+            oled_write_char(' ', false);
+        }
+
+        if (get_mods() & MOD_MASK_CTRL) {
+            oled_write_char(0xc5, false);
+            oled_write_char(0xc6, false);
+        } else {
+            oled_write_char(' ', false);
+            oled_write_char(' ', false);
+        }
+
+        oled_write_char(' ', false);
+
+        if (get_mods() & MOD_MASK_SHIFT) {
+            oled_write_char(0xc5, false);
+            oled_write_char(0xc6, false);
+        } else {
+            oled_write_char(' ', false);
+            oled_write_char(' ', false);
+        }
+
+        oled_write_char(' ', false);
+        oled_write_char(' ', false);
+        oled_write_char(' ', false);
+
+        if (get_mods() & MOD_MASK_SHIFT) {
+            oled_write_char(0xc7, false);
+            oled_write_char(0xc8, false);
+        } else {
+            oled_write_char(' ', false);
+            oled_write_char(' ', false);
+        }
+
+        if (get_mods() & MOD_BIT(KC_LALT)) {
+            oled_write_char(0x89, false);
+            oled_write_char(0x8a, false);
+        } else {
+            oled_write_char(' ', false);
+            oled_write_char(' ', false);
+        }
+
+        oled_write_char(' ', false);
+
+        if (get_mods() & MOD_BIT(KC_RALT)) {
+            oled_write_char(0x8b, false);
+            oled_write_char(0x8c, false);
+        } else {
+            oled_write_char(' ', false);
+            oled_write_char(' ', false);
+        }
+
+        if (get_mods() & MOD_BIT(KC_LALT)) {
+            oled_write_char(0xa9, false);
+            oled_write_char(0xaa, false);
+        } else {
+            oled_write_char(' ', false);
+            oled_write_char(' ', false);
+        }
+
+        oled_write_char(' ', false);
+
+        if (get_mods() & MOD_BIT(KC_RALT)) {
+            oled_write_char(0xab, false);
+            oled_write_char(0xac, false);
+        } else {
+            oled_write_char(' ', false);
+            oled_write_char(' ', false);
+        }
+
+        if (turbo_is_waiting_for_input()) {
+            oled_write_char(0x85, false);
+            oled_write_char(0x86, false);
+        } else {
+            oled_write_char(' ', false);
+            oled_write_char(' ', false);
+        }
+
+        oled_write_char(' ', false);
+
+        if (lock_is_waiting_for_input()) {
+            oled_write_char(0x87, false);
+            oled_write_char(0x88, false);
+        } else {
+            oled_write_char(' ', false);
+            oled_write_char(' ', false);
+        }
+
+        if (turbo_is_waiting_for_input()) {
+            oled_write_char(0xa5, false);
+            oled_write_char(0xa6, false);
+        } else {
+            oled_write_char(' ', false);
+            oled_write_char(' ', false);
+        }
+
+        oled_write_char(' ', false);
+
+        if (lock_is_waiting_for_input()) {
+            oled_write_char(0xa7, false);
+            oled_write_char(0xa8, false);
+        } else {
+            oled_write_char(' ', false);
+            oled_write_char(' ', false);
+        }
+
+        oled_write_char(0x0f, false);
+        bool need_space = true;
+        uint8_t i, j;
+
+        for (i = 0; i < ck_turbo_records_count; i++) {
+            j = (ck_turbo_records_head + i) & (CK_TURBO_KEYS_MAX - 1);
+
+            if (need_space) oled_write_char(' ', false);
+            need_space = oled_write_keycode(ck_turbo_keycodes[j]);
+        }
+
+        oled_set_cursor(0, 12);
+        oled_write_char(0x013, false);
+        need_space = true;
+
+        for (i = 0; i < ck_lock_records_count; i++) {
+            j = (ck_lock_records_head + i) & (CK_LOCKED_KEYS_MAX - 1);
+
+            if (need_space) oled_write_char(' ', false);
+            need_space = oled_write_keycode(ck_locked_keycodes[j]);
         }
     } else {
         render_logo();
 
         oled_set_cursor(0, 5);
+
+        if (keyball_config.do_scroll) {
+            oled_write_char(0x9b, false);
+            oled_write_char(0x9c, false);
+        } else {
+            oled_write_char(' ', false);
+            oled_write_char(' ', false);
+        }
+
+        oled_write_char(' ', false);
+
+        if (keyball_config.do_snipe) {
+            oled_write_char(0x99, false);
+            oled_write_char(0x9a, false);
+        } else {
+            oled_write_char(' ', false);
+            oled_write_char(' ', false);
+        }
+
+        if (keyball_config.do_scroll) {
+            oled_write_char(0xbb, false);
+            oled_write_char(0xbc, false);
+        } else {
+            oled_write_char(' ', false);
+            oled_write_char(' ', false);
+        }
+
+        oled_write_char(' ', false);
+
+        if (keyball_config.do_snipe) {
+            oled_write_char(0xb9, false);
+            oled_write_char(0xba, false);
+        } else {
+            oled_write_char(' ', false);
+            oled_write_char(' ', false);
+        }
 
         oled_write_P(pointing_cpi, false);
         oled_write(get_u8_str(keyball_config.pointing_multiplier, ' '), false);
@@ -759,6 +862,16 @@ bool oled_task_kb(void) {
         oled_write_P(hundred, false);
     }
 
+    return false;
+}
+
+bool shutdown_kb(bool jump_to_bootloader) {
+    oled_clear();
+
+    oled_set_cursor(0, 6);
+    render_logo();
+
+    oled_render_dirty(true);
     return false;
 }
 

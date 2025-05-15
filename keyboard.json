@@ -23,7 +23,8 @@
         "auto_shift": false,
         "combo": false,
         "tap_dance": false,
-        "space_cadet": false
+        "space_cadet": false,
+        "command": false
     },
     "dynamic_keymap": {
         "layer_count": 8
@@ -62,7 +63,8 @@
                 "layer_state": true,
                 "matrix_state": true,
                 "modifiers": true,
-                "wpm": true
+                "wpm": true,
+                "oled": true
             }
         },
         "serial": {

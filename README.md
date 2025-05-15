@@ -21,8 +21,8 @@ This should go without saying, but **Feel free to fork and make your own version
 - Turbo locking: you can use key locking and turbo together!
 - Persistent config on demand: sensitivity settings can be saved to EEPROM by a key press
 - "Natural scrolling" (can be disabled in keymap's `config.h`)
-- Left OLED display shows Lock and Turbo status (up to 16 enries each)
-- Right OLED display shows sensitivity settings
+- Left display shows current layer, modifier state, turbocharged and locked keys
+- Right display shows sensitivity settings, scrolling and sniping state
 
 ## Missing features
 
