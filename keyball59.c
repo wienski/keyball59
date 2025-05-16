@@ -245,6 +245,18 @@ static bool lock_is_waiting_for_input(void) {
 static bool ck_lock_preprocess_record(uint16_t keycode, keyrecord_t *record) {
     if (keycode == CK_LOCK) return true;
 
+    if (lock_is_waiting_for_input() && record->event.pressed) {
+        for (uint8_t i = 0; i < ck_lock_records_count; i++) {
+            uint8_t j = (ck_lock_records_head + i) & (CK_LOCKED_KEYS_MAX - 1);
+            if (ck_locked_keycodes[j] != keycode) continue;
+
+            ck_unlock(j);
+            ck_lock_records_count -= 1;
+
+            return false;
+        }
+    }
+
     for (uint8_t i = 0; i < ck_lock_records_count; i++) {
         uint8_t j = (ck_lock_records_head + i) & (CK_LOCKED_KEYS_MAX - 1);
         if (ck_locked_keycodes[j] != keycode) continue;

@@ -37,7 +37,7 @@ Press Lock, and then the key you want to lock pressed.
 
 Pressing Lock again before any other key will cancel the lock if you hit it accidentally.
 
-Once locked, press the locked key again to unlock it.
+Once locked, press the locked key again to unlock it. You can also cancel the lock by pressing the Lock key before hitting the locked key again, which should be useful in macros.
 
 You can lock virtually any key, up to 16 of them (adjusted in source).
 
