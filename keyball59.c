@@ -243,9 +243,22 @@ static bool lock_is_waiting_for_input(void) {
 }
 
 static bool ck_lock_preprocess_record(uint16_t keycode, keyrecord_t *record) {
-    if (keycode == CK_LOCK) return true;
+    if (keycode == CK_LOCK) {
+        if (record->event.pressed) {
+            if (lock_is_waiting_for_input()) {
+                // cancel locking on second CK_LOCK press
+                ck_lock_records_count -= 1;
+            } else if (ck_lock_records_count < CK_LOCKED_KEYS_MAX) {
+                ck_locked_keycodes[LOCKED_NEXT] = CK_LOCK;
+                ck_lock_records_count += 1;
+            }
+        }
+
+        return false;
+    }
 
     if (lock_is_waiting_for_input() && record->event.pressed) {
+        // unlock if already locked
         for (uint8_t i = 0; i < ck_lock_records_count; i++) {
             uint8_t j = (ck_lock_records_head + i) & (CK_LOCKED_KEYS_MAX - 1);
             if (ck_locked_keycodes[j] != keycode) continue;
@@ -255,6 +268,12 @@ static bool ck_lock_preprocess_record(uint16_t keycode, keyrecord_t *record) {
 
             return false;
         }
+
+        // otherwise, lock
+        ck_locked_keycodes[LOCKED_LAST] = keycode;
+        ck_lock_records[LOCKED_LAST] = false;
+
+        return true;
     }
 
     for (uint8_t i = 0; i < ck_lock_records_count; i++) {
@@ -270,34 +289,12 @@ static bool ck_lock_preprocess_record(uint16_t keycode, keyrecord_t *record) {
             ck_unlock(j);
             return true;
         } else {
-            ck_lock_records[j] = false;
+            // this is the first release
             return false;
         }
     }
 
     return true;
-}
-
-static void ck_lock_process_record(uint16_t keycode, keyrecord_t *record) {
-    if (
-        lock_is_waiting_for_input()
-        && record->event.pressed
-    ) {
-        ck_locked_keycodes[LOCKED_LAST] = keycode;
-    }
-}
-
-static void process_ck_lock(void) {
-    if (lock_is_waiting_for_input()) {
-        // cancel locking on second CK_LOCK press
-        ck_lock_records_count -= 1;
-        return;
-    }
-
-    if (ck_lock_records_count < CK_LOCKED_KEYS_MAX) {
-        ck_locked_keycodes[LOCKED_NEXT] = CK_LOCK;
-        ck_lock_records_count += 1;
-    }
 }
 
 #ifndef CK_TURBO_PERIOD
@@ -412,7 +409,6 @@ static bool ck_turbo_preprocess_record(uint16_t keycode, keyrecord_t *record) {
 
     for (uint8_t i = 0; i < ck_turbo_records_count; i++) {
         uint8_t j = (ck_turbo_records_head + i) & (CK_TURBO_KEYS_MAX - 1);
-
         if (ck_turbo_keycodes[j] != keycode) continue;
 
         if (record->event.pressed) {
@@ -435,6 +431,10 @@ void eeconfig_init_kb(void) {
 }
 
 bool process_record_kb(uint16_t keycode, keyrecord_t *record) {
+    if (!process_record_user(keycode, record)) {
+        return false;
+    }
+
     if (!ck_lock_preprocess_record(keycode, record)) {
         return false;
     }
@@ -442,12 +442,6 @@ bool process_record_kb(uint16_t keycode, keyrecord_t *record) {
     if (!ck_turbo_preprocess_record(keycode, record)) {
         return false;
     }
-
-    if (!process_record_user(keycode, record)) {
-        return false;
-    }
-
-    ck_lock_process_record(keycode, record);
 
     switch (keycode) {
         case TB_SCROLL:
@@ -466,11 +460,6 @@ bool process_record_kb(uint16_t keycode, keyrecord_t *record) {
         case TB_CPI_UP:
             if (record->event.pressed) {
                 tb_adjust_cpi(1);
-            }
-            break;
-        case CK_LOCK:
-            if (record->event.pressed) {
-                process_ck_lock();
             }
             break;
         case CK_SAVE:
@@ -810,6 +799,13 @@ bool oled_task_kb(void) {
             need_space = oled_write_keycode(ck_turbo_keycodes[j]);
         }
 
+#ifdef KEYBALL59_DEBUG
+        oled_set_cursor(0, 10);
+        oled_write_P(get_u8_str(ck_turbo_records_count, ' '), false);
+        oled_set_cursor(0, 11);
+        oled_write_P(get_u8_str(ck_turbo_records_head, ' '), false);
+#endif
+
         oled_set_cursor(0, 12);
         oled_write_char(0x013, false);
         need_space = true;
@@ -820,6 +816,13 @@ bool oled_task_kb(void) {
             if (need_space) oled_write_char(' ', false);
             need_space = oled_write_keycode(ck_locked_keycodes[j]);
         }
+
+#ifdef KEYBALL59_DEBUG
+        oled_set_cursor(0, 13);
+        oled_write_P(get_u8_str(ck_lock_records_count, ' '), false);
+        oled_set_cursor(0, 14);
+        oled_write_P(get_u8_str(ck_lock_records_head, ' '), false);
+#endif
     } else {
         render_logo();
 
